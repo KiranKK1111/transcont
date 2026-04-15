@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LocalSendPro</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>LocalSendPro</h1>
+    <div class="room-bar">
+      <span class="muted">Room</span>
+      <code id="room-name">—</code>
+      <button id="btn-copy" class="ghost" title="Copy share link">Copy link</button>
+      <button id="btn-new" class="ghost" title="Create a new room">New room</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="card drop-zone" id="drop">
+      <div class="drop-inner">
+        <h2>Files in this room</h2>
+        <p class="muted">Drop files here, or
+          <label class="link">browse<input id="file-input" type="file" multiple hidden /></label>.
+          Anyone with the link sees the same files.
+        </p>
+      </div>
+      <ul id="file-list" class="files"></ul>
+      <p id="file-empty" class="muted center">No files yet.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Shared note</h2>
+        <span id="note-status" class="muted small">saved</span>
+      </div>
+      <textarea id="note" rows="10" placeholder="Anything typed here is shared with everyone in the room…"></textarea>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
