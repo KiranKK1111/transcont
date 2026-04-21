@@ -4,13 +4,16 @@ A "room" is just a URL slug. Anyone who knows /r/<slug> can list, upload,
 download, and delete files in it, and read/write a shared text note.
 Files live on disk under <data_dir>/<slug>/.
 
-Five JSON endpoints — that's the whole API:
+Four JSON endpoints — that's the whole API:
 
   GET    /api/{room}              -> { files: [...], note: "..." }
-  POST   /api/{room}/upload       -> multipart files=...
+  POST   /api/{room}               -> multipart files=...  (upload)
   GET    /api/{room}/dl/{name}    -> download a file
   DELETE /api/{room}/dl/{name}    -> delete a file
   PUT    /api/{room}/note         -> { text: "..." }
+
+Files live at <data_dir>/<room>/<filename>. You can also drop files straight
+into that folder on disk and they'll show up in the UI on the next poll.
 """
 from __future__ import annotations
 
@@ -69,7 +72,15 @@ def create_app(data_dir: Path) -> FastAPI:
     @app.get("/r/{room}", include_in_schema=False)
     def room_page(room: str):
         _safe_room(room)
-        html = (Path(__file__).parent / "web" / "index.html").read_text(encoding="utf-8")
+        web_dir = Path(__file__).parent / "web"
+        html = (web_dir / "index.html").read_text(encoding="utf-8")
+        # Cache-bust /static/* by mtime so browsers always see the latest JS/CSS.
+        def mtime(name: str) -> str:
+            try: return str(int((web_dir / name).stat().st_mtime))
+            except OSError: return "0"
+        html = (html
+            .replace("/static/style.css", f"/static/style.css?v={mtime('style.css')}")
+            .replace("/static/app.js",    f"/static/app.js?v={mtime('app.js')}"))
         return HTMLResponse(html)
 
     # ---- API (5 endpoints) ----
@@ -83,9 +94,14 @@ def create_app(data_dir: Path) -> FastAPI:
                 files.append({"name": p.name, "size": st.st_size, "at": st.st_mtime})
         note_path = d / "_note.txt"
         note = note_path.read_text(encoding="utf-8") if note_path.exists() else ""
-        return {"room": _safe_room(room), "files": files, "note": note}
+        return {
+            "room": _safe_room(room),
+            "path": str(d),
+            "files": files,
+            "note": note,
+        }
 
-    @app.post("/api/{room}/upload")
+    @app.post("/api/{room}")
     async def api_upload(room: str, files: List[UploadFile] = File(...)):
         d = room_dir(room)
         saved = 0

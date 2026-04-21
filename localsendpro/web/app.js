@@ -1,10 +1,9 @@
-// Shared-room UI. The room name is the last URL segment: /r/<room>.
+// Minimal shared-room UI. Nothing identifying is shown — no room name,
+// no folder path, no titles. The room is derived from the URL only.
 
 const $ = (sel) => document.querySelector(sel);
 const room = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
 const apiBase = `/api/${encodeURIComponent(room)}`;
-
-$("#room-name").textContent = room;
 
 // ---------- helpers ----------
 function toast(msg, kind = "") {
@@ -28,7 +27,7 @@ function escapeHtml(s) {
   }[c]));
 }
 
-// ---------- room state ----------
+// ---------- refresh (files + note) ----------
 let lastNote = "";
 
 async function refresh() {
@@ -37,20 +36,16 @@ async function refresh() {
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
     renderFiles(data.files);
-    // Don't clobber the textarea while the user is typing
     if (document.activeElement !== $("#note") && data.note !== lastNote) {
       $("#note").value = data.note;
       lastNote = data.note;
     }
-  } catch (e) { /* swallow polling errors */ }
+  } catch { /* swallow polling errors */ }
 }
 
 function renderFiles(files) {
   const list = $("#file-list");
-  const empty = $("#file-empty");
   list.innerHTML = "";
-  if (!files.length) { empty.style.display = ""; return; }
-  empty.style.display = "none";
   for (const f of files) {
     const when = new Date(f.at * 1000).toLocaleTimeString();
     const li = document.createElement("li");
@@ -59,7 +54,7 @@ function renderFiles(files) {
         <a href="${apiBase}/dl/${encodeURIComponent(f.name)}" download>${escapeHtml(f.name)}</a>
       </div>
       <div class="meta">${fmtBytes(f.size)} · ${when}</div>
-      <button class="del" data-name="${escapeHtml(f.name)}">Delete</button>
+      <button class="del" data-name="${escapeHtml(f.name)}">×</button>
     `;
     list.appendChild(li);
   }
@@ -68,37 +63,68 @@ function renderFiles(files) {
   });
 }
 
-// ---------- uploads ----------
-async function uploadFiles(fileList) {
-  if (!fileList || !fileList.length) return;
-  const fd = new FormData();
-  for (const f of fileList) fd.append("files", f, f.name);
-  try {
-    const r = await fetch(`${apiBase}/upload`, { method: "POST", body: fd });
-    if (!r.ok) throw new Error(await r.text());
-    const j = await r.json();
-    toast(`Uploaded ${j.saved} file(s) ✓`, "ok");
-    refresh();
-  } catch (e) {
-    toast("Upload failed: " + e.message, "err");
-  }
-}
-
 async function deleteFile(name) {
   try {
     await fetch(`${apiBase}/dl/${encodeURIComponent(name)}`, { method: "DELETE" });
     refresh();
-  } catch (e) { toast("Delete failed", "err"); }
+  } catch { toast("Delete failed", "err"); }
+}
+
+// ---------- uploads ----------
+const progEl = $("#upload-progress");
+const progFill = $("#upload-fill");
+const progPct = $("#upload-pct");
+const progLabel = $("#upload-label");
+
+function showProgress(label) {
+  progLabel.textContent = label;
+  progPct.textContent = "0%";
+  progFill.style.width = "0%";
+  progEl.classList.remove("hidden");
+}
+function setProgress(loaded, total) {
+  const pct = total ? Math.round((loaded / total) * 100) : 0;
+  progFill.style.width = pct + "%";
+  progPct.textContent = `${pct}%  (${fmtBytes(loaded)} / ${fmtBytes(total)})`;
+}
+function hideProgress() {
+  setTimeout(() => progEl.classList.add("hidden"), 400);
+}
+
+function uploadFiles(fileList) {
+  if (!fileList || !fileList.length) return;
+  const files = Array.from(fileList);
+  const fd = new FormData();
+  let total = 0;
+  for (const f of files) { fd.append("files", f, f.name); total += f.size; }
+
+  showProgress(
+    files.length === 1 ? files[0].name : `${files.length} files (${fmtBytes(total)})`
+  );
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", apiBase);
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(e.loaded, e.total); };
+  xhr.upload.onload = () => setProgress(total, total);
+  xhr.onload = () => {
+    hideProgress();
+    if (xhr.status >= 200 && xhr.status < 300) {
+      toast("Uploaded ✓", "ok");
+      refresh();
+    } else {
+      toast("Upload failed", "err");
+    }
+  };
+  xhr.onerror = () => { hideProgress(); toast("Upload failed", "err"); };
+  xhr.send(fd);
 }
 
 // ---------- note (debounced save) ----------
 let noteTimer = null;
 $("#note").addEventListener("input", () => {
-  $("#note-status").textContent = "saving…";
   clearTimeout(noteTimer);
   noteTimer = setTimeout(saveNote, 500);
 });
-
 async function saveNote() {
   const text = $("#note").value;
   try {
@@ -107,25 +133,17 @@ async function saveNote() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) throw new Error();
     lastNote = text;
-    $("#note-status").textContent = "saved";
-  } catch {
-    $("#note-status").textContent = "save failed";
-  }
+  } catch { /* silent */ }
 }
 
 // ---------- room controls ----------
 $("#btn-copy").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(location.href);
-    toast("Link copied ✓", "ok");
-  } catch { toast("Copy failed", "err"); }
+  try { await navigator.clipboard.writeText(location.href); toast("Link copied ✓", "ok"); }
+  catch { toast("Copy failed", "err"); }
 });
-
-$("#btn-new").addEventListener("click", () => {
-  location.href = "/";
-});
+$("#btn-new").addEventListener("click", () => { location.href = "/"; });
 
 // ---------- drag & drop ----------
 const drop = $("#drop");
@@ -138,7 +156,6 @@ const drop = $("#drop");
 drop.addEventListener("drop", e => {
   if (e.dataTransfer?.files?.length) uploadFiles(e.dataTransfer.files);
 });
-
 $("#file-input").addEventListener("change", e => {
   uploadFiles(e.target.files);
   e.target.value = "";
