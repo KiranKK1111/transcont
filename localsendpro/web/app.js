@@ -29,18 +29,26 @@ function escapeHtml(s) {
 
 // ---------- refresh (files + note) ----------
 let lastNote = "";
+let pollDelay = 2500;         // base interval
+const POLL_MIN = 2500;
+const POLL_MAX = 30000;       // back off to 30s on repeated errors
 
 async function refresh() {
   try {
     const r = await fetch(apiBase);
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) throw new Error(r.status + " " + r.statusText);
     const data = await r.json();
     renderFiles(data.files);
     if (document.activeElement !== $("#note") && data.note !== lastNote) {
       $("#note").value = data.note;
       lastNote = data.note;
     }
-  } catch { /* swallow polling errors */ }
+    pollDelay = POLL_MIN;     // success — go back to fast polling
+  } catch {
+    pollDelay = Math.min(pollDelay * 2, POLL_MAX);
+  } finally {
+    setTimeout(refresh, pollDelay);
+  }
 }
 
 function renderFiles(files) {
@@ -162,5 +170,4 @@ $("#file-input").addEventListener("change", e => {
 });
 
 // ---------- boot ----------
-refresh();
-setInterval(refresh, 2500);
+refresh();  // schedules itself via setTimeout with exponential backoff on errors
