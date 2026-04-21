@@ -1,4 +1,4 @@
-"""Command-line entrypoint for LocalSendPro."""
+"""Command-line entrypoint for EnvPad."""
 from __future__ import annotations
 
 import argparse
@@ -7,8 +7,8 @@ import sys
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
-        prog="localsendpro",
-        description="Peer-to-peer file rooms over the local network.",
+        prog="envpad",
+        description="Self-hosted persistent notes with a slug-routed workspace.",
     )
     p.add_argument("--host", default="0.0.0.0", help="Bind address (default 0.0.0.0)")
     p.add_argument("--port", type=int, default=8080, help="Port (default 8080)")
@@ -19,7 +19,7 @@ def main(argv=None) -> int:
 
     app = create_app()
 
-    print(f"[localsendpro] open : http://{args.host}:{args.port}/")
+    print(f"[envpad] open : http://{args.host}:{args.port}/")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 

@@ -3,43 +3,50 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title></title>
+  <title>EnvPad — Free Online Notepad</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
-<body>
-  <header>
-    <span id="peer-count" class="muted small">connecting…</span>
-    <div class="spacer"></div>
-    <div class="tools">
-      <button id="btn-copy" class="ghost" title="Copy link">⧉</button>
-      <button id="btn-new"  class="ghost" title="New">↻</button>
-    </div>
+<body class="dark landing-body">
+  <header class="landing-header">
+    <div class="brand">EnvPad</div>
+    <button id="theme-toggle" class="ghost theme-btn" title="Toggle theme">&#9790;</button>
   </header>
 
-  <main>
-    <section class="card drop-zone" id="drop">
-      <div id="upload-progress" class="upload hidden">
-        <div class="upload-head">
-          <span id="upload-label"></span>
-          <span id="upload-pct" class="muted small">0%</span>
+  <main class="landing">
+    <div class="logo-mark">E</div>
+    <h1 class="hero-title">
+      One note. Infinite<br><span class="accent">Environments</span>
+    </h1>
+    <p class="hero-sub">Create, edit and share your notes in a simple and fast way.</p>
+
+    <form id="go-form" class="slug-form">
+      <span class="prefix" id="slug-prefix"></span>
+      <input id="slug-input" type="text" placeholder="type-your-page-here"
+             pattern="[A-Za-z0-9_\-]{1,64}" required autocomplete="off"
+             autocapitalize="off" spellcheck="false" />
+      <button type="submit" class="primary">Go!</button>
+    </form>
+    <p class="hint">Type a name for your note and click "Go!" to start</p>
+
+    <section class="why">
+      <h2>Why use EnvPad?</h2>
+      <p class="sub">Simplicity and practicality in one place</p>
+      <div class="features">
+        <div class="feature">
+          <div class="feat-icon">⚡</div>
+          <div class="feat-title">Fast</div>
+          <div class="feat-desc">Create notes instantly, no registration or setup required</div>
         </div>
-        <div class="bar"><div id="upload-fill" class="bar-fill"></div></div>
+        <div class="feature">
+          <div class="feat-icon">↗</div>
+          <div class="feat-title">Shareable</div>
+          <div class="feat-desc">Share your notes easily with a simple and direct link</div>
+        </div>
       </div>
-
-      <label class="drop-hint">
-        <input id="file-input" type="file" multiple hidden />
-        <span class="plus">+</span>
-      </label>
-
-      <ul id="file-list" class="files"></ul>
-    </section>
-
-    <section class="card">
-      <textarea id="note" rows="10" placeholder=""></textarea>
     </section>
   </main>
 
-  <div id="toast" class="toast"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/landing.js" defer></script>
 </body>
 </html>

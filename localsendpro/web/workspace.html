@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Note — EnvPad</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="dark ws-body">
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-head">
+      <a href="/" class="brand">EnvPad</a>
+    </div>
+    <div class="sidebar-body">
+      <div class="storage-label">STORAGE/</div>
+      <div id="folder-tree" class="folder-tree"></div>
+    </div>
+  </aside>
+
+  <main class="editor-main">
+    <header class="topbar">
+      <button id="sidebar-toggle" class="ghost icon-btn sidebar-toggle" title="Toggle sidebar">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+             class="ico-menu">
+          <line x1="3" y1="6"  x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+             class="ico-close">
+          <line x1="5"  y1="5"  x2="19" y2="19" />
+          <line x1="19" y1="5"  x2="5"  y2="19" />
+        </svg>
+      </button>
+      <div class="spacer"></div>
+      <span id="save-indicator" class="save-indicator muted small"></span>
+      <div class="lang-picker">
+        <button id="lang-btn" class="ghost lang-btn">
+          <span id="lang-badge" class="lang-badge"></span>
+          <span id="lang-label" class="lang-label">Plain Text</span>
+          <span class="chev">▾</span>
+        </button>
+        <ul id="lang-menu" class="lang-menu hidden"></ul>
+      </div>
+      <button id="theme-toggle" class="ghost icon-btn theme-btn" title="Toggle theme">&#9790;</button>
+    </header>
+    <section id="editor" class="editor-host"></section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden" role="presentation">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div id="modal-title" class="modal-title"></div>
+      <div id="modal-message" class="modal-message"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="ghost">Cancel</button>
+        <button id="modal-ok" class="modal-ok danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
