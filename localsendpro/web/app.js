@@ -252,19 +252,28 @@ function setLanguage(langId) {
 }
 
 // ---------- save pipeline ----------
+// Three debounce tiers: typing in a small doc saves almost immediately; large
+// docs wait a few seconds; huge docs (50 MB+) wait 8 s so you don't spam the
+// network with quarter-GB PUTs after every word.
 const SAVE_DEBOUNCE_SMALL_MS = 700;
 const SAVE_DEBOUNCE_LARGE_MS = 3000;
-const LARGE_DOC_THRESHOLD    = 1 * 1024 * 1024;   // 1 MB
+const SAVE_DEBOUNCE_HUGE_MS  = 8000;
+const LARGE_DOC_THRESHOLD    = 1 * 1024 * 1024;    // 1 MB
+const HUGE_DOC_THRESHOLD     = 50 * 1024 * 1024;   // 50 MB
 const SAVED_VISIBLE_MS       = 5000;
+
+function saveDebounceFor(size) {
+  if (size > HUGE_DOC_THRESHOLD)  return SAVE_DEBOUNCE_HUGE_MS;
+  if (size > LARGE_DOC_THRESHOLD) return SAVE_DEBOUNCE_LARGE_MS;
+  return SAVE_DEBOUNCE_SMALL_MS;
+}
 
 function scheduleSave() {
   clearTimeout(savedClearTimer);
   $("#save-indicator").classList.remove("fading");
   setSaveIndicator("Editing…");
   clearTimeout(saveTimer);
-  const size = view?.state.doc.length || 0;
-  const delay = size > LARGE_DOC_THRESHOLD ? SAVE_DEBOUNCE_LARGE_MS : SAVE_DEBOUNCE_SMALL_MS;
-  saveTimer = setTimeout(saveNow, delay);
+  saveTimer = setTimeout(saveNow, saveDebounceFor(view?.state.doc.length || 0));
 }
 
 async function saveNow() {
@@ -446,18 +455,20 @@ async function selectDoc(name) {
   if (saveTimer) { clearTimeout(saveTimer); await saveNow(); }
   const res = await fetch(`${API}/docs/${encodeURIComponent(name)}`);
   if (!res.ok) { toast("Failed to load doc", "err"); return; }
-  const doc = await res.json();
-  currentDoc = { folder: doc.folder, name: doc.name, language: doc.language };
+  const content  = await res.text();
+  const folder   = res.headers.get("X-Folder") || SLUG;
+  const language = res.headers.get("X-Language") || "plaintext";
+  currentDoc = { folder, name, language };
   suppressSave = true;
   if (view) view.destroy();
   $("#editor").innerHTML = "";
-  mountEditor(doc.content || "", doc.language || "plaintext");
-  applyLanguageChrome(doc.language || "plaintext");
+  mountEditor(content, language);
+  applyLanguageChrome(language);
   suppressSave = false;
   setSaveIndicator("");
   const docs = await fetchDocs();
-  renderFolderTree(docs, doc.name);
-  localStorage.setItem(`envpad-last:${SLUG}`, doc.name);
+  renderFolderTree(docs, name);
+  localStorage.setItem(`envpad-last:${SLUG}`, name);
 }
 
 async function createDocRequest(name, folder, language = "plaintext") {
@@ -567,6 +578,75 @@ async function deleteFolder(folder) {
   if (next) await selectDoc(next.name);
   else renderFolderTree([], null);
 }
+
+// ---------- load-from-file (bypasses the clipboard/paste path) ----------
+const MAX_LOAD_BYTES = 300 * 1024 * 1024; // match server cap
+
+function fmtMB(bytes) { return (bytes / (1024 * 1024)).toFixed(1) + " MB"; }
+
+async function loadFromFile(file) {
+  if (!view || !currentDoc) { toast("No doc open", "err"); return; }
+  if (file.size > MAX_LOAD_BYTES) {
+    toast(`File too large (${fmtMB(file.size)}) — cap is 300 MB`, "err");
+    return;
+  }
+  setSaveIndicator(`Loading ${file.name} (${fmtMB(file.size)})…`);
+  let text;
+  try {
+    text = await file.text();
+  } catch (err) {
+    console.error("[envpad] file read failed:", err);
+    toast("Could not read file", "err");
+    setSaveIndicator("");
+    return;
+  }
+  suppressSave = true;
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: text },
+  });
+  suppressSave = false;
+  const inferred = inferLangFromName(file.name);
+  if (inferred !== "plaintext") setLanguage(inferred);
+  setSaveIndicator("Loaded — saving…");
+  scheduleSave();
+}
+
+const fileInput = $("#file-input");
+$("#open-file-btn").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  const f = fileInput.files?.[0];
+  fileInput.value = "";
+  if (f) loadFromFile(f);
+});
+
+// Drag-and-drop over the editor area. Counter avoids the child-flicker
+// problem where dragenter/dragleave fire repeatedly over sub-elements.
+const dropWrap = $("#editor-wrap");
+const dropOverlay = $("#drop-overlay");
+let dragDepth = 0;
+dropWrap.addEventListener("dragenter", (e) => {
+  if (!e.dataTransfer?.types?.includes("Files")) return;
+  e.preventDefault();
+  dragDepth++;
+  dropOverlay.classList.remove("hidden");
+});
+dropWrap.addEventListener("dragover", (e) => {
+  if (e.dataTransfer?.types?.includes("Files")) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+});
+dropWrap.addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropOverlay.classList.add("hidden");
+});
+dropWrap.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.classList.add("hidden");
+  const file = e.dataTransfer?.files?.[0];
+  if (file) loadFromFile(file);
+});
 
 // ---------- language picker ----------
 function buildLangMenu() {

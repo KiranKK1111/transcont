@@ -21,16 +21,18 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 
-MAX_DOC_BYTES = 50 * 1024 * 1024  # 50 MB per doc
+MAX_DOC_BYTES = 300 * 1024 * 1024  # 300 MB per doc
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 _RESERVED_SLUGS = {"api", "static", "favicon.ico", "robots.txt"}
@@ -90,9 +92,26 @@ class RenameBody(BaseModel):
     to: str
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Silence the benign ConnectionResetError [WinError 10054] that Python's
+    # asyncio ProactorEventLoop logs when a browser abruptly closes a keepalive
+    # socket (fetch abort, tab close, etc.). The request itself is already
+    # resolved by the time this fires — it's just log noise on Windows.
+    if sys.platform == "win32":
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        def _handler(lp, ctx):
+            if not isinstance(ctx.get("exception"), ConnectionResetError):
+                lp.default_exception_handler(ctx)
+        loop.set_exception_handler(_handler)
+    yield
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="EnvPad", version="0.4.0",
-                  docs_url=None, redoc_url=None, openapi_url=None)
+                  docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=_lifespan)
     db = _open_db()
     web_dir = Path(__file__).parent / "web"
 
@@ -167,8 +186,15 @@ def create_app() -> FastAPI:
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="not found")
-        return {"folder": row[0], "name": name,
-                "content": row[1], "language": row[2], "updated_at": row[3]}
+        return Response(
+            content=row[1],
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "X-Folder": row[0],
+                "X-Language": row[2],
+                "X-Updated-At": str(row[3]),
+            },
+        )
 
     @app.put("/api/ws/{slug}/docs/{name}")
     async def put_doc(
@@ -181,7 +207,10 @@ def create_app() -> FastAPI:
             language = "plaintext"
         raw = await request.body()
         if len(raw) > MAX_DOC_BYTES:
-            raise HTTPException(status_code=413, detail="content too large")
+            raise HTTPException(
+                status_code=413,
+                detail=f"content too large ({len(raw):,} bytes, cap is {MAX_DOC_BYTES:,})",
+            )
         try:
             content = raw.decode("utf-8")
         except UnicodeDecodeError:

@@ -339,11 +339,43 @@ button.primary:hover { background: var(--accent-2); }
 }
 .lang-btn .lang-badge { width: 20px; height: 20px; font-size: 9px; }
 
+.editor-wrap {
+  flex: 1; min-height: 0; min-width: 0;
+  position: relative; display: flex;
+}
 .editor-host {
   flex: 1; min-height: 0; overflow: hidden;
   background: var(--bg-2);
   padding: 10px;
 }
+
+.drop-overlay {
+  position: absolute; inset: 8px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: rgba(124, 92, 255, .08);
+  backdrop-filter: blur(2px);
+  display: grid; place-items: center;
+  z-index: 40;
+  pointer-events: none;       /* let drop event pass to editor */
+  animation: fade-in .12s ease-out;
+}
+.drop-overlay.hidden { display: none; }
+.drop-hint-big {
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  color: var(--accent);
+}
+.drop-ring {
+  width: 56px; height: 56px; border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: grid; place-items: center;
+  box-shadow: 0 10px 30px rgba(124, 92, 255, .35);
+  position: relative;
+}
+.drop-ring::after {
+  content: "↓"; color: #fff; font-size: 28px; font-weight: 700;
+}
+.drop-text { font-weight: 600; font-size: 15px; }
 .editor-host .cm-editor {
   height: 100%;
   border: 1px solid var(--border);
