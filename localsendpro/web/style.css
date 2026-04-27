@@ -256,6 +256,40 @@ button.primary:hover { background: var(--accent-2); }
 .doc-item:hover .doc-del { opacity: 1; }
 .doc-item .doc-del:hover { color: var(--err); background: var(--hover); }
 
+/* ---------- attachments ---------- */
+.storage-label-attach { margin-top: 18px; }
+.attach-list { padding: 0 0 0 4px; }
+.attach-empty { padding: 4px 8px; }
+
+.attach-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: 6px;
+  color: var(--text); cursor: pointer;
+  border-left: 2px solid transparent;
+  text-decoration: none;
+}
+.attach-item:hover { background: var(--hover); border-left-color: var(--accent); }
+.attach-ico {
+  flex-shrink: 0; width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent);
+}
+.attach-ico svg { width: 16px; height: 16px; }
+.attach-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.attach-name {
+  font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.attach-size { color: var(--muted); font-size: 11px; }
+.attach-del {
+  background: transparent; border: none; color: var(--muted);
+  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  font-size: 16px; line-height: 1; opacity: 0;
+  flex-shrink: 0;
+}
+.attach-item:hover .attach-del { opacity: 1; }
+.attach-del:hover { color: var(--err); background: var(--hover); }
+
 /* Inline VS Code-style rename entry */
 .doc-item.pending, .folder-block.pending .folder-row { cursor: text; }
 .inline-name-input {

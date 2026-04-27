@@ -580,14 +580,33 @@ async function deleteFolder(folder) {
 }
 
 // ---------- load-from-file (bypasses the clipboard/paste path) ----------
-const MAX_LOAD_BYTES = 300 * 1024 * 1024; // match server cap
+// Fetched from the server at boot so the cap always matches whatever
+// ENVPAD_MAX_DOC_MB / ENVPAD_MAX_ATTACH_MB the deploy is configured with.
+let MAX_LOAD_BYTES = 300 * 1024 * 1024;
+let MAX_ATTACH_BYTES = 5 * 1024 * 1024 * 1024;
+(async () => {
+  try {
+    const r = await fetch("/api/config");
+    if (r.ok) {
+      const j = await r.json();
+      if (j.maxDocBytes)    MAX_LOAD_BYTES   = j.maxDocBytes;
+      if (j.maxAttachBytes) MAX_ATTACH_BYTES = j.maxAttachBytes;
+    }
+  } catch {}
+})();
 
 function fmtMB(bytes) { return (bytes / (1024 * 1024)).toFixed(1) + " MB"; }
+function fmtBytes(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
 
 async function loadFromFile(file) {
   if (!view || !currentDoc) { toast("No doc open", "err"); return; }
   if (file.size > MAX_LOAD_BYTES) {
-    toast(`File too large (${fmtMB(file.size)}) — cap is 300 MB`, "err");
+    toast(`File too large (${fmtMB(file.size)}) — cap is ${fmtMB(MAX_LOAD_BYTES)}`, "err");
     return;
   }
   setSaveIndicator(`Loading ${file.name} (${fmtMB(file.size)})…`);
@@ -648,6 +667,134 @@ dropWrap.addEventListener("drop", (e) => {
   if (file) loadFromFile(file);
 });
 
+// ---------- attachments (binary blobs, downloadable) ----------
+const ATTACH_FILE_ICON = `
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/>
+  </svg>`;
+
+async function fetchAttachments() {
+  const res = await fetch(`${API}/attachments`);
+  if (!res.ok) throw new Error(`list attachments failed: HTTP ${res.status}`);
+  return res.json();
+}
+
+function renderAttachments(items) {
+  const root = $("#attach-list");
+  root.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "attach-empty muted small";
+    empty.textContent = "No files attached.";
+    root.appendChild(empty);
+    return;
+  }
+  for (const a of items) {
+    const row = document.createElement("a");
+    row.className = "attach-item";
+    row.href = `${API}/attachments/${encodeURIComponent(a.name)}`;
+    row.setAttribute("download", a.name);
+    row.innerHTML = `
+      <span class="attach-ico">${ATTACH_FILE_ICON}</span>
+      <span class="attach-meta">
+        <span class="attach-name"></span>
+        <span class="attach-size"></span>
+      </span>
+      <button class="attach-del" title="Delete attachment">×</button>
+    `;
+    row.querySelector(".attach-name").textContent = a.name;
+    row.querySelector(".attach-size").textContent = fmtBytes(a.size);
+    row.querySelector(".attach-del").addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ok = await confirmModal({
+        title: "Delete attachment",
+        message: `Delete "${a.name}"? This can't be undone.`,
+        okLabel: "Delete",
+      });
+      if (!ok) return;
+      await deleteAttachment(a.name);
+    });
+    root.appendChild(row);
+  }
+}
+
+async function refreshAttachments() {
+  try {
+    const items = await fetchAttachments();
+    renderAttachments(items);
+  } catch (err) {
+    console.error("[envpad] attachments fetch failed:", err);
+  }
+}
+
+function uploadAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const url = `${API}/attachments?name=${encodeURIComponent(file.name)}`;
+    xhr.open("POST", url);
+    xhr.setRequestHeader(
+      "Content-Type",
+      file.type || "application/octet-stream",
+    );
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.floor((e.loaded / e.total) * 100);
+        setSaveIndicator(`Uploading ${file.name} — ${pct}% (${fmtBytes(e.loaded)}/${fmtBytes(e.total)})`);
+      } else {
+        setSaveIndicator(`Uploading ${file.name} — ${fmtBytes(e.loaded)}`);
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch { resolve({}); }
+      } else {
+        reject(new Error(`HTTP ${xhr.status} ${xhr.responseText.slice(0, 200)}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.onabort = () => reject(new Error("Upload aborted"));
+    xhr.send(file);
+  });
+}
+
+async function attachFile(file) {
+  if (!file) return;
+  if (file.size > MAX_ATTACH_BYTES) {
+    toast(`File too large (${fmtBytes(file.size)}) — cap is ${fmtBytes(MAX_ATTACH_BYTES)}`, "err");
+    return;
+  }
+  try {
+    setSaveIndicator(`Uploading ${file.name} — 0%`);
+    await uploadAttachment(file);
+    setSaveIndicator(`Uploaded ${file.name}`);
+    scheduleSavedFade();
+    await refreshAttachments();
+    toast(`Attached ${file.name}`, "ok");
+  } catch (err) {
+    console.error("[envpad] attach failed:", err);
+    toast(`Upload failed — ${err.message.slice(0, 80)}`, "err");
+    setSaveIndicator("");
+  }
+}
+
+async function deleteAttachment(name) {
+  const res = await fetch(`${API}/attachments/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!res.ok) { toast("Delete failed", "err"); return; }
+  await refreshAttachments();
+}
+
+const attachInput = $("#attach-input");
+$("#attach-btn").addEventListener("click", () => attachInput.click());
+attachInput.addEventListener("change", () => {
+  const f = attachInput.files?.[0];
+  attachInput.value = "";
+  if (f) attachFile(f);
+});
+
 // ---------- language picker ----------
 function buildLangMenu() {
   const menu = $("#lang-menu");
@@ -695,8 +842,9 @@ applyLanguageChrome("plaintext");
     const docs = await fetchDocs();
     const last = localStorage.getItem(`envpad-last:${SLUG}`);
     const pick = docs.find(d => d.name === last) || docs[0];
-    if (!pick) { renderFolderTree([], null); return; }
-    await selectDoc(pick.name);
+    if (pick) await selectDoc(pick.name);
+    else      renderFolderTree([], null);
+    await refreshAttachments();
   } catch (err) {
     console.error("[envpad] boot failed:", err);
     toast("Failed to load workspace — see console", "err");

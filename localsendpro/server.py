@@ -1,8 +1,9 @@
 """EnvPad-style persistent notes server.
 
-Each URL slug is a workspace. A workspace holds one or more named docs,
-each with its own content and language. Anyone with the URL can read and
-write. Docs are persisted in SQLite with a 50 MB per-doc cap.
+Each URL slug is a workspace. A workspace holds one or more named docs
+(text, edited in CodeMirror) and any number of attachments (binary blobs
+streamed to disk and downloaded as-is). Anyone with the URL can read and
+write. Docs are persisted in SQLite; attachments live as files on disk.
 
 Routes:
   GET    /                                          -> landing page
@@ -14,6 +15,10 @@ Routes:
   POST   /api/ws/{workspace}/docs/{name}/rename     -> {to}
   DELETE /api/ws/{workspace}/docs/{name}            -> delete doc
   DELETE /api/ws/{workspace}/folders/{folder}       -> delete folder + all its docs
+  GET    /api/ws/{workspace}/attachments            -> list attachments
+  POST   /api/ws/{workspace}/attachments?name=...   -> stream-upload a binary blob
+  GET    /api/ws/{workspace}/attachments/{name}     -> download blob
+  DELETE /api/ws/{workspace}/attachments/{name}     -> delete blob
   GET    /static/*                                  -> assets
 """
 from __future__ import annotations
@@ -26,13 +31,22 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 
-MAX_DOC_BYTES = 300 * 1024 * 1024  # 300 MB per doc
+# Per-doc size cap. Override via env var in constrained environments —
+# e.g. set ENVPAD_MAX_DOC_MB=25 on a 512 MB Render instance, since each
+# request peaks at ~3x the body size in RAM (raw bytes + decoded str +
+# SQLite write buffer).
+MAX_DOC_BYTES = int(os.environ.get("ENVPAD_MAX_DOC_MB", "300")) * 1024 * 1024
+
+# Per-attachment cap. Attachments stream chunk-by-chunk to disk, so RAM
+# stays flat regardless of size — only disk space matters. Default 5 GB.
+MAX_ATTACH_BYTES = int(os.environ.get("ENVPAD_MAX_ATTACH_MB", "5120")) * 1024 * 1024
+ATTACH_CHUNK = 1 * 1024 * 1024  # 1 MB read/write window
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 _RESERVED_SLUGS = {"api", "static", "favicon.ico", "robots.txt"}
@@ -55,6 +69,17 @@ def _db_path() -> Path:
     return Path(env) if env else Path.cwd() / "envpad.db"
 
 
+def _blob_root() -> Path:
+    env = os.environ.get("ENVPAD_BLOBS")
+    return Path(env) if env else Path.cwd() / "blobs"
+
+
+def _blob_path(slug: str, name: str) -> Path:
+    # Caller is responsible for having validated `slug` and `name` first
+    # (`_check_slug` / `_check_docname` reject path-traversal characters).
+    return _blob_root() / slug / name
+
+
 def _open_db() -> sqlite3.Connection:
     db = sqlite3.connect(str(_db_path()), check_same_thread=False, isolation_level=None)
     db.execute("PRAGMA journal_mode=WAL")
@@ -66,6 +91,14 @@ def _open_db() -> sqlite3.Connection:
             content    TEXT NOT NULL DEFAULT '',
             language   TEXT NOT NULL DEFAULT 'plaintext',
             updated_at REAL NOT NULL,
+            PRIMARY KEY (workspace, name)
+        );
+        CREATE TABLE IF NOT EXISTS attachments (
+            workspace    TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            size         INTEGER NOT NULL,
+            content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+            uploaded_at  REAL NOT NULL,
             PRIMARY KEY (workspace, name)
         );
     """)
@@ -127,6 +160,13 @@ def create_app() -> FastAPI:
     @app.get("/", include_in_schema=False)
     def landing():
         return _serve("index.html")
+
+    @app.get("/api/config")
+    def api_config():
+        return {
+            "maxDocBytes": MAX_DOC_BYTES,
+            "maxAttachBytes": MAX_ATTACH_BYTES,
+        }
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon():
@@ -270,6 +310,114 @@ def create_app() -> FastAPI:
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="folder not found")
         return {"ok": True, "deleted": cur.rowcount}
+
+    # ---------- attachments (binary blobs on disk) ----------
+    @app.get("/api/ws/{slug}/attachments")
+    def list_attachments(slug: str):
+        _check_slug(slug)
+        rows = db.execute(
+            "SELECT name, size, content_type, uploaded_at FROM attachments"
+            " WHERE workspace = ? ORDER BY uploaded_at DESC",
+            (slug,),
+        ).fetchall()
+        return [
+            {"name": r[0], "size": r[1], "content_type": r[2], "uploaded_at": r[3]}
+            for r in rows
+        ]
+
+    @app.post("/api/ws/{slug}/attachments")
+    async def upload_attachment(
+        slug: str,
+        request: Request,
+        name: str = Query(..., min_length=1, max_length=128),
+    ):
+        _check_slug(slug)
+        safe_name = _check_docname(name)
+        # If client advertised a Content-Length, reject early before touching disk.
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > MAX_ATTACH_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"too large ({int(cl):,} bytes, cap is {MAX_ATTACH_BYTES:,})",
+            )
+        blob_dir = _blob_root() / slug
+        blob_dir.mkdir(parents=True, exist_ok=True)
+        final_path = blob_dir / safe_name
+        tmp_path = blob_dir / (safe_name + ".part")
+        written = 0
+        try:
+            with open(tmp_path, "wb") as fh:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > MAX_ATTACH_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"too large (>{MAX_ATTACH_BYTES:,} bytes)",
+                        )
+                    fh.write(chunk)
+            os.replace(tmp_path, final_path)
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+        content_type = (request.headers.get("content-type")
+                        or "application/octet-stream").split(";", 1)[0].strip()
+        if len(content_type) > 128:
+            content_type = "application/octet-stream"
+        now = time.time()
+        db.execute(
+            "INSERT INTO attachments (workspace, name, size, content_type, uploaded_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(workspace, name) DO UPDATE SET"
+            "   size=excluded.size,"
+            "   content_type=excluded.content_type,"
+            "   uploaded_at=excluded.uploaded_at",
+            (slug, safe_name, written, content_type, now),
+        )
+        return {"name": safe_name, "size": written,
+                "content_type": content_type, "uploaded_at": now}
+
+    @app.get("/api/ws/{slug}/attachments/{name}")
+    def download_attachment(slug: str, name: str):
+        _check_slug(slug)
+        safe_name = _check_docname(name)
+        row = db.execute(
+            "SELECT size, content_type FROM attachments"
+            " WHERE workspace = ? AND name = ?",
+            (slug, safe_name),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="not found")
+        path = _blob_path(slug, safe_name)
+        if not path.is_file():
+            raise HTTPException(status_code=410, detail="blob missing on disk")
+        # FileResponse streams in chunks and sets Content-Disposition: attachment
+        # with the filename for us when `filename=` is provided.
+        return FileResponse(
+            path=str(path),
+            media_type=row[1] or "application/octet-stream",
+            filename=safe_name,
+        )
+
+    @app.delete("/api/ws/{slug}/attachments/{name}")
+    def delete_attachment(slug: str, name: str):
+        _check_slug(slug)
+        safe_name = _check_docname(name)
+        cur = db.execute(
+            "DELETE FROM attachments WHERE workspace = ? AND name = ?",
+            (slug, safe_name),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="not found")
+        try:
+            _blob_path(slug, safe_name).unlink()
+        except FileNotFoundError:
+            pass
+        return {"ok": True}
 
     if web_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
